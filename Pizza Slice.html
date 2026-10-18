@@ -1,0 +1,787 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
+    <title>Pizza Slice — нарежь по счёту</title>
+    <style>
+        * { margin:0; padding:0; box-sizing:border-box; user-select:none; -webkit-tap-highlight-color:transparent; }
+        body {
+            background:#1a0f0a; min-height:100vh; display:flex; justify-content:center; align-items:center;
+            font-family:'Segoe UI', Roboto, system-ui, sans-serif; touch-action:none; overflow:hidden;
+        }
+        #game-container {
+            position:relative; width:100vw; height:100vh; max-width:800px; max-height:1200px;
+            background:#1a0d05; overflow:hidden; border-radius:24px; cursor:crosshair;
+            box-shadow:0 0 50px rgba(255,140,0,0.2);
+        }
+        canvas { display:block; width:100%; height:100%; }
+        .hud {
+            position:absolute; top:0; left:0; width:100%; padding:20px 24px;
+            display:flex; justify-content:space-between; align-items:center;
+            pointer-events:none; z-index:10; color:#ffdbb5;
+            text-shadow:0 4px 10px rgba(0,0,0,0.8); font-weight:700; font-size:1.5rem;
+        }
+        .score-box, .miss-box {
+            background:rgba(40,20,5,0.7); padding:8px 24px; border-radius:40px;
+            border:2px solid #ff9f4b; box-shadow:0 0 20px rgba(255,140,0,0.5); letter-spacing:1px;
+        }
+        .miss-box { border-color:#ff4b4b; color:#ffb3b3; box-shadow:0 0 20px rgba(255,60,60,0.5); }
+        #combo-indicator {
+            position:absolute; top:100px; left:50%; transform:translateX(-50%);
+            font-size:2.5rem; font-weight:900; color:#ffd966;
+            text-shadow:0 0 30px #ff9900, 0 0 10px #ff5500;
+            opacity:0; transition:opacity 0.2s; pointer-events:none; z-index:20;
+            white-space:nowrap; letter-spacing:4px;
+        }
+        .flash {
+            position:absolute; top:0; left:0; width:100%; height:100%;
+            pointer-events:none; background:rgba(255,80,0,0.3); opacity:0;
+            transition:opacity 0.1s; z-index:5;
+        }
+        .overlay {
+            position:absolute; top:0; left:0; width:100%; height:100%;
+            display:flex; flex-direction:column; justify-content:center; align-items:center;
+            background:rgba(15,7,2,0.85); z-index:100; transition:opacity 0.4s;
+            color:#ffe6cc; text-align:center; padding:24px;
+        }
+        .overlay.hidden { opacity:0; pointer-events:none; }
+        .overlay h1 {
+            font-size:clamp(2.5rem,10vw,4.5rem); font-weight:900; color:#ffb347;
+            text-shadow:0 0 30px #ff7b00, 0 0 10px #ff4d00; letter-spacing:4px;
+            margin-bottom:16px; line-height:1.1; transform:rotate(-2deg);
+        }
+        .overlay h2 { font-size:clamp(1.8rem,6vw,2.8rem); color:#ff8a5c; margin-bottom:20px; }
+        .overlay p {
+            font-size:1.2rem; max-width:520px; margin-bottom:32px; color:#d9b38c;
+            line-height:1.6; background:rgba(0,0,0,0.4); padding:14px 26px;
+            border-radius:20px; border-left:4px solid #ff7b00; text-align:left;
+        }
+        .btn {
+            background:linear-gradient(135deg,#f7a34b,#cc5a0e); border:none; color:#fff5e6;
+            font-weight:800; font-size:2rem; padding:18px 64px; border-radius:100px;
+            box-shadow:0 12px 0 #8b3d00, 0 20px 30px rgba(0,0,0,0.6); cursor:pointer;
+            transition:transform 0.07s, box-shadow 0.07s; letter-spacing:3px;
+            text-transform:uppercase; pointer-events:auto; margin-top:10px;
+        }
+        .btn:active { transform:translateY(8px); box-shadow:0 4px 0 #8b3d00, 0 10px 20px rgba(0,0,0,0.6); }
+        .btn:hover { filter:brightness(1.1); }
+        @media (max-width:600px) {
+            .hud { font-size:1.2rem; padding:12px 16px; }
+            .score-box, .miss-box { padding:6px 16px; }
+            .btn { font-size:1.5rem; padding:14px 42px; }
+            .overlay p { font-size:1rem; }
+        }
+    </style>
+</head>
+<body>
+<div id="game-container">
+    <canvas id="gameCanvas"></canvas>
+    <div class="flash" id="flashEffect"></div>
+    <div class="hud">
+        <div class="score-box" id="scoreDisplay">🍕 0</div>
+        <div class="miss-box" id="missDisplay">💥 0 / 5</div>
+    </div>
+    <div id="comboIndicator">COMBO!</div>
+    <div class="overlay" id="startOverlay">
+        <h1>PIZZA SLICE</h1>
+        <p>
+            🍕 На пицце написано число — сколько кусков надо отрезать.<br>
+            ✂️ Каждый свайп через пиццу = один разрез.<br>
+            ✅ Отрежь все куски — получи очки.<br>
+            🔥 Подгоревшую пиццу резать нельзя!
+        </p>
+        <button class="btn" id="startBtn">ИГРАТЬ</button>
+    </div>
+    <div class="overlay hidden" id="gameOverOverlay">
+        <h2>🍕 GAME OVER</h2>
+        <p id="finalScoreText" style="border-left-color:#ff4b4b; text-align:center;">Твой счёт: 0</p>
+        <button class="btn" id="restartBtn">ЕЩЁ РАЗ</button>
+    </div>
+</div>
+
+<script>
+(function() {
+    'use strict';
+
+    const MAX_MISSES = 5;
+    const GRAVITY = 0.14;
+    const SPAWN_INTERVAL_MS = 900;
+    const MIN_SPEED_Y = -16;
+    const MAX_SPEED_Y = -12;
+    const MIN_SPEED_X = -2.5;
+    const MAX_SPEED_X = 2.5;
+    const SLICE_STEP = 8;
+    const MAX_TRAIL_POINTS = 10;
+    const COMBO_TIMEOUT = 600;
+    const MAX_PARTICLES = 80;
+
+    const PIZZA_RADIUS = 62;      // крупная пицца
+
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d', { alpha: false });
+    const scoreDisplay = document.getElementById('scoreDisplay');
+    const missDisplay = document.getElementById('missDisplay');
+    const comboIndicator = document.getElementById('comboIndicator');
+    const flashEffect = document.getElementById('flashEffect');
+    const startOverlay = document.getElementById('startOverlay');
+    const gameOverOverlay = document.getElementById('gameOverOverlay');
+    const finalScoreText = document.getElementById('finalScoreText');
+    const startBtn = document.getElementById('startBtn');
+    const restartBtn = document.getElementById('restartBtn');
+
+    let width = 0, height = 0, dpr = 1;
+    let gameActive = false;
+    let score = 0, misses = 0;
+    let objects = [], slicedEffects = [], particles = [];
+    let lastSpawnTime = 0;
+    let rafId = null;
+    let lastTimestamp = 0;
+
+    let pointerDown = false;
+    let pointerId = null;
+    let pointerPos = { x:0, y:0 };
+    let lastPointerPos = { x:0, y:0 };
+    let swipeTrail = [];
+
+    let comboCount = 0;
+    let comboTimerId = null;
+
+    let bgGradient = null;
+
+    const rand = (a,b) => a + Math.random()*(b-a);
+    const randInt = (a,b) => Math.floor(Math.random()*(b-a+1)) + a;
+
+    function resizeCanvas() {
+        const container = canvas.parentElement;
+        const rect = container.getBoundingClientRect();
+        dpr = Math.min(window.devicePixelRatio || 1, 2);
+        width = rect.width;
+        height = rect.height;
+        canvas.width = Math.round(width * dpr);
+        canvas.height = Math.round(height * dpr);
+        canvas.style.width = rect.width + 'px';
+        canvas.style.height = rect.height + 'px';
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+        bgGradient = ctx.createRadialGradient(
+            width*0.3, height*0.2, 50,
+            width*0.5, height*0.6, Math.max(width, height)
+        );
+        bgGradient.addColorStop(0, '#2e1b0e');
+        bgGradient.addColorStop(1, '#0d0703');
+    }
+
+    // ---- СПАВН ----
+    function spawnPizza() {
+        const isBurnt = Math.random() < 0.2;   // 20% подгоревших
+        // Сколько кусков нужно
+        let cutsNeeded;
+        if (isBurnt) {
+            cutsNeeded = 0;   // у подгоревшей нет цели — её нельзя резать
+        } else {
+            // Лёгкие пиццы чаще: 1, 2, 3, 4
+            const r = Math.random();
+            if (r < 0.35) cutsNeeded = 1;
+            else if (r < 0.65) cutsNeeded = 2;
+            else if (r < 0.88) cutsNeeded = 3;
+            else cutsNeeded = 4;
+        }
+
+        objects.push({
+            x: rand(width*0.18, width*0.82),
+            y: height + PIZZA_RADIUS + rand(20, 60),
+            vx: rand(MIN_SPEED_X, MAX_SPEED_X),
+            vy: rand(MIN_SPEED_Y, MAX_SPEED_Y),
+            radius: PIZZA_RADIUS,
+            cutsNeeded: cutsNeeded,
+            cutsDone: 0,                 // сколько разрезов сделано
+            cutAngles: [],               // углы линий разрезов
+            burnt: isBurnt,
+            sliced: false,               // полностью ли разрезана/уничтожена
+            rotation: rand(0, Math.PI*2),
+            rotSpeed: rand(-0.02, 0.02),
+            // Анимация: при разрезе добавим визуальную «вспышку»
+            sliceFlash: 0
+        });
+    }
+
+    // ---- РАЗРЕЗ ----
+    function tryCutPizza(obj, angle) {
+        if (obj.sliced) return;
+
+        // Подгоревшая — штраф и уничтожаем
+        if (obj.burnt) {
+            obj.sliced = true;
+            misses++;
+            updateMisses();
+            triggerFlash();
+            score = Math.max(0, score - 3);
+            updateScore();
+            spawnParticles(obj.x, obj.y, false, 16);
+            resetCombo();
+            const idx = objects.indexOf(obj);
+            if (idx !== -1) objects.splice(idx, 1);
+            return;
+        }
+
+        // Уже готово резать нечего
+        if (obj.cutsDone >= obj.cutsNeeded) return;
+
+        // Добавляем линию разреза
+        // Нормализуем угол, чтобы линии не дублировались слишком близко
+        let a = angle;
+        // Проверяем, нет ли уже линии с похожим углом (в пределах 12°)
+        const DUP_ANGLE = 0.21;   // ~12°
+        for (const existing of obj.cutAngles) {
+            // углы линий — по модулю π (линия не имеет направления)
+            let diff = Math.abs(((a - existing) % Math.PI + Math.PI) % Math.PI);
+            if (diff > Math.PI/2) diff = Math.PI - diff;
+            if (diff < DUP_ANGLE) return;  // уже есть почти такая же линия — игнор
+        }
+
+        obj.cutAngles.push(a);
+        obj.cutsDone++;
+        obj.sliceFlash = 1.0;
+        spawnParticles(obj.x, obj.y, true, 6);
+
+        // Готово?
+        if (obj.cutsDone >= obj.cutsNeeded) {
+            // Очки: N * 10 + бонус за точность
+            const gained = obj.cutsNeeded * 10;
+            score += gained;
+            updateScore();
+            incrementCombo();
+            // Разлетается на куски
+            explodePizza(obj);
+            obj.sliced = true;
+            const idx = objects.indexOf(obj);
+            if (idx !== -1) objects.splice(idx, 1);
+        }
+    }
+
+    // ---- РАЗЛЁТ ГОТОВОЙ ПИЦЦЫ НА КУСКИ ----
+    // Пицца разрезана N линиями через центр → получается 2N секторов.
+    // Но по заданию "на сколько кусков" — куски = N. Значит, режем веером,
+    // и считаем, что каждый разрез добавляет один кусок (первый разрез делит на 2, но
+    // для геймплея условимся: N разрезов → N кусков, символически).
+    // Для визуала сделаем N веерных кусков.
+    function explodePizza(obj) {
+        const N = obj.cutsNeeded;
+        const R = obj.radius;
+        const canvasSize = Math.ceil(R * 2.6);
+        const center = canvasSize / 2;
+
+        // Базовый угол — например, от первого разреза, чтобы куски совпадали с линиями
+        const baseAngle = obj.cutAngles[0] || 0;
+
+        // N кусков, каждый — сектор углом 2π/N, но на самом деле
+        // у нас разрезов N штук → секторов 2N. Для геймплея покажем N «основных» кусков,
+        // каждый из которых — сектор с вершиной в центре, но поделённый пополам линией.
+        // Проще: N секторов по 2π/N.
+        for (let i = 0; i < N; i++) {
+            const startAngle = baseAngle + (i * 2 * Math.PI / N);
+            const endAngle = startAngle + (2 * Math.PI / N);
+            const midAngle = startAngle + Math.PI / N;
+
+            // Offscreen canvas для куска
+            const c = document.createElement('canvas');
+            c.width = canvasSize; c.height = canvasSize;
+            const g = c.getContext('2d');
+
+            // Клипаем сектор
+            g.save();
+            g.beginPath();
+            g.moveTo(center, center);
+            g.arc(center, center, R, startAngle, endAngle);
+            g.closePath();
+            g.clip();
+
+            // Рисуем пиццу (круг с корочкой и начинкой)
+            drawPizzaOnContext(g, center, center, R);
+
+            g.restore();
+
+            // Тонкая обводка среза — чтобы куски читались
+            g.save();
+            g.beginPath();
+            g.moveTo(center, center);
+            g.arc(center, center, R, startAngle, endAngle);
+            g.closePath();
+            g.strokeStyle = 'rgba(255, 220, 150, 0.55)';
+            g.lineWidth = 1.5;
+            g.stroke();
+            g.restore();
+
+            // Куски летят в стороны по midAngle
+            const speed = 5.5;
+            slicedEffects.push({
+                x: obj.x,
+                y: obj.y,
+                vx: Math.cos(midAngle) * speed * rand(0.8, 1.3) + obj.vx * 0.3,
+                vy: Math.sin(midAngle) * speed * rand(0.8, 1.3) + obj.vy * 0.3 - 1.5,
+                canvas: c,
+                size: canvasSize,
+                rotation: 0,
+                rotSpeed: rand(-0.06, 0.06),
+                life: 1.0,
+                good: true
+            });
+        }
+    }
+
+    // ---- Отрисовка пиццы (на любом контексте) ----
+    function drawPizzaOnContext(g, cx, cy, R) {
+        // Корочка
+        g.beginPath();
+        g.arc(cx, cy, R, 0, Math.PI*2);
+        g.fillStyle = '#c97b3a';   // корочка
+        g.fill();
+
+        // Сыр
+        g.beginPath();
+        g.arc(cx, cy, R * 0.86, 0, Math.PI*2);
+        g.fillStyle = '#f5b942';   // сыр
+        g.fill();
+
+        // Томатный соус
+        g.beginPath();
+        g.arc(cx, cy, R * 0.78, 0, Math.PI*2);
+        g.fillStyle = '#d94a2b';   // соус
+        g.fill();
+
+        // Кусочки пепперони — раскиданы по кругу
+        const toppings = [
+            { r: 0.55, a: 0.3, s: 0.18, color: '#a8322a' },
+            { r: 0.45, a: 2.1, s: 0.16, color: '#b8382e' },
+            { r: 0.6, a: 3.8, s: 0.15, color: '#a02820' },
+            { r: 0.42, a: 5.0, s: 0.17, color: '#b8382e' },
+            { r: 0.5, a: 1.2, s: 0.14, color: '#a8322a' },
+            { r: 0.55, a: 4.5, s: 0.16, color: '#b8382e' }
+        ];
+        for (const t of toppings) {
+            const tx = cx + Math.cos(t.a) * R * t.r;
+            const ty = cy + Math.sin(t.a) * R * t.r;
+            g.beginPath();
+            g.arc(tx, ty, R * t.s, 0, Math.PI*2);
+            g.fillStyle = t.color;
+            g.fill();
+            g.strokeStyle = 'rgba(80, 20, 15, 0.4)';
+            g.lineWidth = 1;
+            g.stroke();
+        }
+
+        // Немного зелени (базилик)
+        g.fillStyle = '#4a8a3a';
+        for (let i = 0; i < 5; i++) {
+            const a = i * 1.3 + 0.5;
+            const rr = R * 0.65;
+            const px = cx + Math.cos(a) * rr;
+            const py = cy + Math.sin(a) * rr;
+            g.beginPath();
+            g.ellipse(px, py, R * 0.06, R * 0.03, a, 0, Math.PI*2);
+            g.fill();
+        }
+    }
+
+    // ---- Отрисовка целой пиццы с цифрой и линиями разрезов ----
+    function drawPizza(obj) {
+        const x = obj.x, y = obj.y, R = obj.radius;
+        const burnt = obj.burnt;
+
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.rotate(obj.rotation);
+
+        // Лёгкое свечение
+        if (!burnt) {
+            ctx.shadowColor = '#ffaa33';
+            ctx.shadowBlur = 18;
+        } else {
+            ctx.shadowColor = '#ff2200';
+            ctx.shadowBlur = 20;
+        }
+
+        if (burnt) {
+            // Подгоревшая пицца — тёмные тона
+            ctx.beginPath(); ctx.arc(0, 0, R, 0, Math.PI*2);
+            ctx.fillStyle = '#3a1f0f'; ctx.fill();
+            ctx.beginPath(); ctx.arc(0, 0, R*0.86, 0, Math.PI*2);
+            ctx.fillStyle = '#2a1408'; ctx.fill();
+            ctx.beginPath(); ctx.arc(0, 0, R*0.78, 0, Math.PI*2);
+            ctx.fillStyle = '#1f0d05'; ctx.fill();
+            // Угольки/трещины
+            ctx.strokeStyle = 'rgba(80, 30, 10, 0.9)';
+            ctx.lineWidth = 2.5;
+            for (let i = 0; i < 6; i++) {
+                const a = i * 1.05;
+                const r1 = R * 0.3;
+                const r2 = R * 0.75;
+                ctx.beginPath();
+                ctx.moveTo(Math.cos(a)*r1, Math.sin(a)*r1);
+                ctx.lineTo(Math.cos(a+0.3)*r2, Math.sin(a+0.3)*r2);
+                ctx.stroke();
+            }
+            // Пламя-эмодзи в центре
+            ctx.shadowBlur = 0;
+            ctx.font = `${R*0.9}px "Segoe UI Emoji","Apple Color Emoji",sans-serif`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('🔥', 0, R*0.05);
+        } else {
+            // Обычная пицца
+            drawPizzaOnContext(ctx, 0, 0, R);
+            ctx.shadowBlur = 0;
+
+            // Линии уже сделанных разрезов
+            if (obj.cutAngles.length > 0) {
+                ctx.strokeStyle = 'rgba(30, 10, 5, 0.85)';
+                ctx.lineWidth = 3;
+                ctx.lineCap = 'round';
+                for (const a of obj.cutAngles) {
+                    ctx.beginPath();
+                    ctx.moveTo(Math.cos(a) * R * 0.95, Math.sin(a) * R * 0.95);
+                    ctx.lineTo(-Math.cos(a) * R * 0.95, -Math.sin(a) * R * 0.95);
+                    ctx.stroke();
+                }
+                // Светлая обводка срезов (сыр выглядит разрезанным)
+                ctx.strokeStyle = 'rgba(255, 220, 140, 0.7)';
+                ctx.lineWidth = 1.2;
+                for (const a of obj.cutAngles) {
+                    ctx.beginPath();
+                    ctx.moveTo(Math.cos(a) * R * 0.92, Math.sin(a) * R * 0.92);
+                    ctx.lineTo(-Math.cos(a) * R * 0.92, -Math.sin(a) * R * 0.92);
+                    ctx.stroke();
+                }
+            }
+
+            // Центральный бейдж с цифрой
+            const remaining = obj.cutsNeeded - obj.cutsDone;
+
+            // Тёмный кружок в центре (бейдж)
+            ctx.beginPath();
+            ctx.arc(0, 0, R * 0.32, 0, Math.PI*2);
+            ctx.fillStyle = 'rgba(30, 12, 5, 0.85)';
+            ctx.fill();
+            ctx.strokeStyle = '#ffd166';
+            ctx.lineWidth = 2.5;
+            ctx.stroke();
+
+            // Цифра «сколько всего нужно»
+            ctx.shadowBlur = 0;
+            ctx.fillStyle = '#ffe9b8';
+            ctx.font = `bold ${R * 0.42}px "Segoe UI", sans-serif`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(String(obj.cutsNeeded), 0, 2);
+
+            // Маленький прогресс под цифрой: точки «осталось»
+            const dotR = R * 0.045;
+            const totalDots = obj.cutsNeeded;
+            const dotSpacing = R * 0.13;
+            const startX = -(totalDots - 1) * dotSpacing / 2;
+            const dotY = R * 0.48;
+            for (let i = 0; i < totalDots; i++) {
+                ctx.beginPath();
+                ctx.arc(startX + i*dotSpacing, dotY, dotR, 0, Math.PI*2);
+                if (i < remaining) {
+                    ctx.fillStyle = '#ffd166';     // ещё надо отрезать
+                } else {
+                    ctx.fillStyle = 'rgba(255, 209, 102, 0.25)'; // уже отрезано
+                }
+                ctx.fill();
+                if (i < remaining) {
+                    ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+                    ctx.lineWidth = 1;
+                    ctx.stroke();
+                }
+            }
+        }
+
+        ctx.restore();
+
+        // Обводка (мигание для подгоревших)
+        if (burnt) {
+            ctx.beginPath();
+            ctx.arc(x, y, R*1.02, 0, Math.PI*2);
+            const pulse = 0.4 + 0.3 * Math.sin(performance.now() * 0.01);
+            ctx.strokeStyle = `rgba(255,60,0,${pulse})`;
+            ctx.lineWidth = 3;
+            ctx.stroke();
+        }
+
+        // Вспышка при разрезе
+        if (obj.sliceFlash > 0) {
+            ctx.beginPath();
+            ctx.arc(x, y, R * (1.0 + (1 - obj.sliceFlash) * 0.4), 0, Math.PI*2);
+            ctx.strokeStyle = `rgba(255, 240, 200, ${obj.sliceFlash * 0.8})`;
+            ctx.lineWidth = 4;
+            ctx.stroke();
+        }
+    }
+
+    function spawnParticles(x, y, good, count) {
+        if (particles.length > MAX_PARTICLES) return;
+        const baseColor = good ? '255,200,50' : '255,80,30';
+        for (let i = 0; i < count; i++) {
+            const a = rand(0, Math.PI*2);
+            const sp = rand(1, 5);
+            particles.push({
+                x, y,
+                vx: Math.cos(a)*sp,
+                vy: Math.sin(a)*sp - 1,
+                life: 1.0,
+                size: rand(2, 5),
+                color: `rgba(${baseColor},${rand(0.6,1)})`
+            });
+        }
+    }
+
+    function updateScore() { scoreDisplay.textContent = `🍕 ${score}`; }
+    function updateMisses() {
+        missDisplay.textContent = `💥 ${misses} / ${MAX_MISSES}`;
+        if (misses >= MAX_MISSES) gameOver();
+    }
+
+    function incrementCombo() {
+        comboCount++;
+        if (comboCount >= 3) {
+            comboIndicator.style.opacity = '1';
+            comboIndicator.textContent = `🔥 COMBO x${comboCount}`;
+        }
+        if (comboTimerId) clearTimeout(comboTimerId);
+        comboTimerId = setTimeout(resetCombo, COMBO_TIMEOUT);
+    }
+    function resetCombo() {
+        comboCount = 0;
+        comboIndicator.style.opacity = '0';
+        if (comboTimerId) { clearTimeout(comboTimerId); comboTimerId = null; }
+    }
+
+    function triggerFlash() {
+        flashEffect.style.opacity = '0.7';
+        setTimeout(() => { flashEffect.style.opacity = '0'; }, 100);
+    }
+
+    function gameOver() {
+        if (!gameActive) return;
+        gameActive = false;
+        finalScoreText.textContent = `🍕 Твой счёт: ${score}`;
+        gameOverOverlay.classList.remove('hidden');
+    }
+
+    function resetGame() {
+        gameActive = true;
+        score = 0; misses = 0;
+        objects = []; slicedEffects = []; particles = []; swipeTrail = [];
+        pointerDown = false; pointerId = null;
+        updateScore(); updateMisses(); resetCombo();
+        startOverlay.classList.add('hidden');
+        gameOverOverlay.classList.add('hidden');
+        lastSpawnTime = performance.now();
+        if (!rafId) {
+            lastTimestamp = performance.now();
+            rafId = requestAnimationFrame(loop);
+        }
+    }
+
+    function loop(now) {
+        rafId = requestAnimationFrame(loop);
+        const dt = Math.min(now - lastTimestamp, 40);
+        lastTimestamp = now;
+        if (gameActive) {
+            if (now - lastSpawnTime > SPAWN_INTERVAL_MS) {
+                spawnPizza();
+                lastSpawnTime = now;
+            }
+            updatePhysics(dt);
+        }
+        updateEffects(dt);
+        render();
+    }
+
+    function updatePhysics(dt) {
+        const f = Math.min(dt / 16.667, 2);
+        for (let i = objects.length-1; i >= 0; i--) {
+            const o = objects[i];
+            o.x += o.vx * f;
+            o.y += o.vy * f;
+            o.vy += GRAVITY * f;
+            o.rotation += o.rotSpeed * f;
+            if (o.sliceFlash > 0) o.sliceFlash = Math.max(0, o.sliceFlash - 0.05 * f);
+
+            // Улетела за низ
+            if (o.y - o.radius > height + 60 && o.vy > 0) {
+                if (o.good !== false && !o.sliced) {
+                    // Недонарезанная хорошая пицца — промах
+                    if (!o.burnt && o.cutsDone < o.cutsNeeded) {
+                        misses++;
+                        updateMisses();
+                    }
+                }
+                objects.splice(i, 1);
+            } else if (o.y + o.radius < -250) {
+                objects.splice(i, 1);
+            }
+        }
+    }
+
+    function updateEffects(dt) {
+        const f = Math.min(dt / 16.667, 2);
+        for (let i = slicedEffects.length-1; i >= 0; i--) {
+            const e = slicedEffects[i];
+            e.x += e.vx * f; e.y += e.vy * f;
+            e.vy += GRAVITY * 0.85 * f;
+            e.rotation += e.rotSpeed * f;
+            e.life -= 0.01 * f;
+            if (e.life <= 0 || e.y > height + 300) slicedEffects.splice(i, 1);
+        }
+        for (let i = particles.length-1; i >= 0; i--) {
+            const p = particles[i];
+            p.x += p.vx * f; p.y += p.vy * f;
+            p.vy += GRAVITY * 0.5 * f;
+            p.life -= 0.03 * f;
+            p.vx *= 0.99;
+            if (p.life <= 0) particles.splice(i, 1);
+        }
+    }
+
+    function render() {
+        ctx.fillStyle = bgGradient;
+        ctx.fillRect(0, 0, width, height);
+
+        if (swipeTrail.length > 1) {
+            ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+            ctx.beginPath();
+            ctx.moveTo(swipeTrail[0].x, swipeTrail[0].y);
+            for (let i = 1; i < swipeTrail.length; i++) ctx.lineTo(swipeTrail[i].x, swipeTrail[i].y);
+            ctx.strokeStyle = 'rgba(255,190,80,0.55)';
+            ctx.lineWidth = 7; ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(swipeTrail[0].x, swipeTrail[0].y);
+            for (let i = 1; i < swipeTrail.length; i++) ctx.lineTo(swipeTrail[i].x, swipeTrail[i].y);
+            ctx.strokeStyle = 'rgba(255,255,220,0.9)';
+            ctx.lineWidth = 2.5; ctx.stroke();
+        }
+
+        for (let i = 0; i < particles.length; i++) {
+            const p = particles[i];
+            ctx.globalAlpha = p.life;
+            ctx.fillStyle = p.color;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI*2);
+            ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+
+        for (let i = 0; i < slicedEffects.length; i++) {
+            const e = slicedEffects[i];
+            ctx.globalAlpha = Math.min(1, e.life * 1.5);
+            ctx.save();
+            ctx.translate(e.x, e.y);
+            ctx.rotate(e.rotation);
+            ctx.drawImage(e.canvas, -e.size/2, -e.size/2);
+            ctx.restore();
+        }
+        ctx.globalAlpha = 1;
+
+        for (let i = 0; i < objects.length; i++) {
+            drawPizza(objects[i]);
+        }
+    }
+
+    // ---------- ВВОД ----------
+    function getCanvasPos(clientX, clientY) {
+        const rect = canvas.getBoundingClientRect();
+        return {
+            x: (clientX - rect.left) * (width / rect.width),
+            y: (clientY - rect.top) * (height / rect.height)
+        };
+    }
+
+    function trySliceSegment(from, to) {
+        const dx = to.x - from.x;
+        const dy = to.y - from.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist < 1) return;
+
+        const angle = Math.atan2(dy, dx);
+        const steps = Math.max(1, Math.ceil(dist / SLICE_STEP));
+
+        for (let s = 0; s <= steps; s++) {
+            const t = s / steps;
+            const px = from.x + dx * t;
+            const py = from.y + dy * t;
+
+            for (let i = objects.length-1; i >= 0; i--) {
+                const o = objects[i];
+                if (o.sliced) continue;
+                const d = Math.hypot(o.x - px, o.y - py);
+                if (d < o.radius) {
+                    tryCutPizza(o, angle);
+                }
+            }
+        }
+    }
+
+    function onPointerDown(e) {
+        if (!gameActive) return;
+        pointerDown = true;
+        pointerId = e.pointerId;
+        const p = getCanvasPos(e.clientX, e.clientY);
+        pointerPos = p; lastPointerPos = p;
+        swipeTrail = [p];
+        try { canvas.setPointerCapture(e.pointerId); } catch(_) {}
+    }
+
+    function onPointerMove(e) {
+        if (!gameActive) return;
+        const p = getCanvasPos(e.clientX, e.clientY);
+
+        if (!pointerDown || e.pointerId !== pointerId) {
+            pointerPos = p;
+            return;
+        }
+
+        lastPointerPos = pointerPos;
+        pointerPos = p;
+
+        swipeTrail.push(p);
+        if (swipeTrail.length > MAX_TRAIL_POINTS) swipeTrail.shift();
+
+        trySliceSegment(lastPointerPos, pointerPos);
+    }
+
+    function onPointerUp(e) {
+        if (e.pointerId !== pointerId) return;
+        pointerDown = false;
+        pointerId = null;
+        try { canvas.releasePointerCapture(e.pointerId); } catch(_) {}
+        setTimeout(() => { if (!pointerDown) swipeTrail = []; }, 80);
+    }
+
+    function init() {
+        resizeCanvas();
+        window.addEventListener('resize', resizeCanvas);
+        window.addEventListener('orientationchange', () => setTimeout(resizeCanvas, 100));
+
+        canvas.addEventListener('pointerdown', onPointerDown);
+        canvas.addEventListener('pointermove', onPointerMove);
+        canvas.addEventListener('pointerup', onPointerUp);
+        canvas.addEventListener('pointercancel', onPointerUp);
+        canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+        startBtn.addEventListener('click', resetGame);
+        restartBtn.addEventListener('click', resetGame);
+
+        updateScore(); updateMisses();
+
+        lastTimestamp = performance.now();
+        rafId = requestAnimationFrame(loop);
+    }
+
+    init();
+})();
+</script>
+</body>
+</html>
